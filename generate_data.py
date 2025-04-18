@@ -91,6 +91,7 @@ def generate_synthetic_data(model, tokenizer, ds, k=10, samples='all', verbose=F
 
         for i, response in enumerate(responses):
             question = question_chunk[i // k]
+            answer = answer_chunk[i // k]
             gt_answer = gt_answers[i // k]
             try:
                 response_answer = response.split("####")[1].lstrip(' ').strip()
@@ -98,7 +99,7 @@ def generate_synthetic_data(model, tokenizer, ds, k=10, samples='all', verbose=F
                     correct = True
                 else:
                     correct = False
-                dataset.append({'question': question, 'gt_answer': gt_answer, 'llm_answer': response, 'correct': correct})
+                dataset.append({'question': question, 'gt_answer': gt_answer, 'orig_answer': answer,'llm_answer': response, 'correct': correct})
             except:
                 continue
 
