@@ -66,9 +66,9 @@ def generate_synthetic_data(model, tokenizer, ds, k=10, samples='all', verbose=F
     questions = ds['question']
     answers = ds['answer']
 
-    chunk_size = 128
+    chunk_size = 256
     question_chunks = list(chunked(questions, chunk_size))
-    answer_chunks = list(chunked(answers, chunk_size))]
+    answer_chunks = list(chunked(answers, chunk_size))
 
     print(f"Number of chunks: {len(question_chunks)}, chunk_size: {chunk_size}")
 
@@ -80,10 +80,10 @@ def generate_synthetic_data(model, tokenizer, ds, k=10, samples='all', verbose=F
         "text-generation",
         model=model,
         tokenizer=tokenizer,
-        batch_size=32
+        batch_size=128
     )
 
-    for chunk_idx, (question_chunk, answer_chunk) in enumerate(tqdm(zip(question_chunks, answer_chunks), total=len(questions))):
+    for chunk_idx, (question_chunk, answer_chunk) in enumerate(tqdm(zip(question_chunks, answer_chunks), total=len(question_chunks))):
         print(f"Processing chunk {chunk_idx}")
         gt_answers = [answer.split("####")[1].lstrip(' ').strip() for answer in answer_chunk]
         
@@ -136,6 +136,6 @@ if __name__ == "__main__":
     df = pd.DataFrame(syn_data)
     df.to_csv(f'/workspace/syn_data.csv')
 
-    dataset = Dataset.from_pandas(df)
+    dataset = datasets.Dataset.from_pandas(df)
 
-    dataset.push_to_hub('Ebony59/gsm8k-gen', private=True)
+    dataset.push_to_hub('ebony59/gsm8k-gen', private=True)
