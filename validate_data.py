@@ -8,8 +8,11 @@ def validate_equations(equations):
     for eq in equations:
         try:
             lhs, rhs = eq.split("=")
-            lhs_val = eval(lhs.strip())
-            rhs_val = eval(rhs.strip())
+            lhs_processed = re.sub(r'(\d+)(\()', r'\1*\2', lhs.strip())
+            rhs_processed = re.sub(r'(\d+)(\()', r'\1*\2', rhs.strip())
+            
+            lhs_val = eval(lhs_processed.strip())
+            rhs_val = eval(rhs_processed.strip())
             if abs(lhs_val - rhs_val) > 1e-3:
                 return False
         except Exception:
@@ -25,6 +28,8 @@ def get_distances(ds):
     curr_question = ds[0]['question']
     orig_equations = get_equations(ds[0]['orig_answer'])
     avg_distances = []
+
+    selected_ds = []
 
     for d in tqdm(ds):
         question = d['question']
@@ -51,8 +56,9 @@ def get_distances(ds):
                 dist += Levenshtein.distance(equation_i, equation_j)
         dist = dist / (len(equations)*len(orig_equations))
         d['distance'] = dist
+        selected_ds.append(d)
 
-    return ds
+    return selected_ds
         
 
 if __name__ == "__main__":
@@ -64,6 +70,8 @@ if __name__ == "__main__":
     ds = get_distances(ds)
     df = pd.DataFrame(ds)
     new_dataset = Dataset.from_pandas(df)
+
+    print(f"length of checked dataset: {len(new_dataset)}/{len(dataset)}")
     new_dataset.push_to_hub(OUTPUT_DATASET, private=True)
 
     
