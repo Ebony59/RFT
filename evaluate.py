@@ -2,6 +2,7 @@ import torch
 import datasets
 import pandas as pd
 from transformers import AutoModelForCausalLM, AutoTokenizer, pipeline
+from more_itertools import chunked
 
 from tqdm import tqdm
 from generate_data import generate_solution
@@ -17,22 +18,38 @@ def evaluate_model(
     questions = eval_dataset['question']
     answers = eval_dataset['answer']
 
-    correct = 0
+    chunk_size = 64
+    question_chunks = list(chunked(questions, chunk_size))
+    answer_chunks = list(chunked(answers, chunk_size))
+
+    print(f"Number of chunks: {len(question_chunks)}, chunk_size: {chunk_size}")
 
     if samples != 'all':
         questions = questions[:samples]
         answers = answers[:samples]
 
-    for question, answer in tqdm(zip(questions, answers), total=len(questions)):
-        gt_answer = answer.split("####")[1].lstrip(' ').strip()
-        if verbose:
-            print('question:', question)
-            print('gt_answer:', answer)
-        responses = generate_solution(model, tokenizer, question, 1, verbose)
-        response = responses[0]
-        response_answer = response.split("####")[1].lstrip(' ').strip()
-        if gt_answer == response_answer:
-            correct += 1
+    pipe = pipeline(
+        "text-generation",
+        model=model,
+        tokenizer=tokenizer,
+        batch_size=8
+    )
+
+    for chunk_idx, (question_chunk, answer_chunk) in enumerate(tqdm(zip(question_chunks, answer_chunks), total=len(question_chunks))):
+        print(f"Processing chunk {chunk_idx}")
+        gt_answers = [answer.split("####")[1].lstrip(' ').strip() for answer in answer_chunk]
+        
+        responses = generate_solution(pipe, question_chunk, 1, verbose)
+
+        for i, response in enumerate(responses):
+            question = question_chunk[i]
+            gt_answer = gt_answers[i]
+            try:
+                response_answer = response.split("####")[1].lstrip(' ').strip()
+                if gt_answer == response_answer:
+                    correct += 1
+            except:
+                continue
 
     return correct / len(questions)
 
@@ -50,6 +67,7 @@ if __name__ == "__main__":
         device_map="cuda",
         torch_dtype="auto",
         trust_remote_code=True,
+        attn_implementation="flash_attention_2"
     )
     tokenizer = AutoTokenizer.from_pretrained(MODEL)
 
@@ -58,6 +76,7 @@ if __name__ == "__main__":
         device_map="cuda",
         torch_dtype="auto",
         trust_remote_code=True,
+        attn_implementation="flash_attention_2"
     )
     original_tokenizer = AutoTokenizer.from_pretrained("microsoft/Phi-3.5-mini-instruct")
 
