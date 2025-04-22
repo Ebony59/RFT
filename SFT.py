@@ -54,7 +54,7 @@ def merge_and_upload_model(lora_model, tokenizer, model_repo):
     return trained_model
 
 def get_data_collator(response_template):
-    collator = DataCollatorForCompletionOnlyLM(response_template, tokenizer=tokenizer)e
+    collator = DataCollatorForCompletionOnlyLM(response_template, tokenizer=tokenizer)
     return collator
 
 def verify_data_collator(dataset, collator, text=None):
