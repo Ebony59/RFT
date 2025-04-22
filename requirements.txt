@@ -7,4 +7,4 @@ pandas
 numpy
 trl==0.8.6
 transformers==4.43.0
-accelerate==1.6.1
+accelerate==1.6.0

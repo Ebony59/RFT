@@ -35,6 +35,8 @@ def evaluate_model(
         batch_size=8
     )
 
+    correct = 0
+
     for chunk_idx, (question_chunk, answer_chunk) in enumerate(tqdm(zip(question_chunks, answer_chunks), total=len(question_chunks))):
         print(f"Processing chunk {chunk_idx}")
         gt_answers = [answer.split("####")[1].lstrip(' ').strip() for answer in answer_chunk]
@@ -54,7 +56,8 @@ def evaluate_model(
     return correct / len(questions)
 
 if __name__ == "__main__":
-    MODEL = "ebony59/phi3.5-gsm8k-SFT"
+    MODEL_ORIG = "ebony59/phi3.5-gsm8k-SFT"
+    MODEL = "ebony59/phi3.5-gsm8k-FT"
     DATASET = "openai/gsm8k"
 
     samples = 'all'
@@ -72,13 +75,13 @@ if __name__ == "__main__":
     tokenizer = AutoTokenizer.from_pretrained(MODEL)
 
     original_model = AutoModelForCausalLM.from_pretrained(
-        "microsoft/Phi-3.5-mini-instruct",
+        MODEL_ORIG,
         device_map="cuda",
         torch_dtype="auto",
         trust_remote_code=True,
         attn_implementation="flash_attention_2"
     )
-    original_tokenizer = AutoTokenizer.from_pretrained("microsoft/Phi-3.5-mini-instruct")
+    original_tokenizer = AutoTokenizer.from_pretrained(MODEL_ORIG)
 
     
     ds = datasets.load_dataset(DATASET, 'main')
