@@ -9,17 +9,17 @@ from common import *
 
 if __name__ == "__main__":
     BASE_MODEL = "Qwen/Qwen2-0.5B"
-    TRAIN_DATASET = "ebony59/gsm8k-gen-stepwise"
+    TRAIN_DATASET = "ebony59/gsm8k-gen-stepwise-1label"
     PROJECT_NAME = "gsm8k_Qwen2_syn_PRM"
     HF_ID = 'ebony59'
-    MODEL_NAME = 'Qwen2-gsm8k-syn-PRM'
+    MODEL_NAME = 'Qwen2-gsm8k-syn-PRM-1label'
 
-    wandb.init(project=PROJECT_NAME, name="1 epoch")
+    wandb.init(project=PROJECT_NAME, name="1 epoch, 1 label")
 
     # Load tokeniser and base model
     model = AutoModelForTokenClassification.from_pretrained(
         BASE_MODEL,
-        num_labels=2,
+        num_labels=1,
         device_map="cuda",
         torch_dtype="auto",
         trust_remote_code=True,
@@ -65,11 +65,13 @@ if __name__ == "__main__":
         processing_class=tokenizer,
         args=training_args,
         train_dataset=train_dataset,
-        peft_config=lora_config
+        # peft_config=lora_config
     )
 
     print("Starting PRM training...")
     trainer.train()
+
+    print(model)
     
     tokenizer.push_to_hub(f'{HF_ID}/{MODEL_NAME}', private=True)
     model.push_to_hub(f'{HF_ID}/{MODEL_NAME}', private=True)

@@ -159,11 +159,6 @@ def train(
         print_trainable_parameters(model)
         return model
 
-    # collate_fn = DataCollatorForCompletionOnlyLM(
-    #     response_template="<|assistant|>\n",
-    #     tokenizer=tokenizer
-    # )
-
     tokenized_dataset = dataset.map(
         apply_tokenizer,
         fn_kwargs={"tokenizer": tokenizer},
@@ -175,10 +170,6 @@ def train(
 
     dataloader = DataLoader(
         tokenized_dataset,
-        # collate_fn=lambda examples: {
-        #     k: v.to(config.device) 
-        #     for k, v in collate_fn(examples).items()
-        # },
         collate_fn=collate_fn,
         batch_size=config.batch_size,
         shuffle=True
