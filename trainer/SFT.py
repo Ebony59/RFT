@@ -9,7 +9,7 @@ import numpy as np
 import torch
 import wandb
 
-from common import *
+from trainer.common import *
 
 TRAINING_SCRIPT_ROOT = Path(__file__).absolute().parent.parent
 

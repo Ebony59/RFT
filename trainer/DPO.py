@@ -5,7 +5,7 @@ from peft import LoraConfig
 import torch
 import wandb
 
-from common import *
+from trainer.common import *
 
 if __name__ == '__main__':
     BASE_MODEL = "microsoft/Phi-3.5-mini-instruct"

@@ -17,7 +17,7 @@ from trl import (
     PPOTrainer
 )
 
-from common import *
+from trainer.common import *
 
 def apply_ppo_template(
     example,
@@ -211,13 +211,15 @@ class CustomPPOTrainer(PPOTrainer):
                     postprocessed_query_response = torch.cat((query, postprocessed_response), 1)
                     sequence_length = first_true_indices(postprocessed_response == processing_class.pad_token_id) - 1
                     unwrapped_value_model = accelerator.unwrap_model(model).value_model
-                    full_value, _, _ = custom_get_reward(
+                    # HACK!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+                    full_value, _, _ = get_reward(
                         unwrapped_value_model, query_response, processing_class.pad_token_id, context_length
                     )
-                    value = full_value[:, context_length - 1 : -1].squeeze(-1)
-                    _, score, _ = custom_get_reward(
+                    value = full_value[:, context_length - 1 : -1, 1].squeeze(-1)
+                    _, score, _ = get_reward(
                         reward_model, postprocessed_query_response, processing_class.pad_token_id, context_length
                     )
+                    score = score[:, :, 1]
 
                     responses.append(response)
                     postprocessed_responses.append(postprocessed_response)
@@ -256,6 +258,7 @@ class CustomPPOTrainer(PPOTrainer):
                 # 4. compute rewards
                 # Formula used by http://joschu.net/blog/kl-approx.html for the k1 and k3 estimators
                 logr = ref_logprobs - logprobs
+                # HACK!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
                 args.kl_estimator = "k1"
                 kl = -logr if args.kl_estimator == "k1" else (logr.exp() - 1) - logr  # Else statement is k3
                 non_score_reward = -args.kl_coef * kl
@@ -443,7 +446,7 @@ if __name__ == "__main__":
     HF_ID = 'ebony59'
     MODEL_NAME = 'phi3.5-gsm8k-syn-PPO'
 
-    wandb.init(project=PROJECT_NAME, name="1e-6 cosine, 1 epoch")
+    wandb.init(project=PROJECT_NAME, name="1e-6 cosine, from FT, 1 epoch")
 
     # Load tokeniser and base model
     model = AutoModelForCausalLM.from_pretrained(
@@ -484,7 +487,7 @@ if __name__ == "__main__":
         trust_remote_code=True,
         attn_implementation="flash_attention_2"
     )
-    reward_tokenizer = AutoTokenizer.from_pretrained(REWARD_BASE_MODEL)
+    reward_tokenizer = AutoTokenizer.from_pretrained(REWARD_MODEL)
 
     value_model = AutoModelForTokenClassification.from_pretrained(
         REWARD_MODEL,
@@ -519,6 +522,9 @@ if __name__ == "__main__":
     train_ds = split["train"]
     eval_ds  = split["test"]
 
+    print("original model output")
+    validate_output(dataset, model, tokenizer, samples=1)
+
     ppo_trainer = CustomPPOTrainer(
         args=ppo_config,
         processing_class=tokenizer,
@@ -528,9 +534,13 @@ if __name__ == "__main__":
         value_model=value_model,
         train_dataset=train_ds,
         eval_dataset=eval_ds,
-        peft_config=lora_config
+        peft_config=lora_config,
+        lr_scheduler='cosine'
     )
 
     ppo_trainer.train()
     model.push_to_hub(f'{HF_ID}/{MODEL_NAME}', private=True)
     tokenizer.push_to_hub(f'{HF_ID}/{MODEL_NAME}', private=True)
+
+    print("new model output")
+    validate_output(dataset, model, tokenizer, samples=1)

@@ -3,9 +3,9 @@ import wandb
 from datasets import load_dataset
 from trl import PRMConfig, PRMTrainer
 from peft import LoraConfig
-from transformers import AutoModelForTokenClassification, AutoModelForCausalLM, AutoTokenizer
+from transformers import AutoModelForSequenceClassification, AutoModelForCausalLM, AutoTokenizer
 
-from common import *
+from trainer.common import *
 
 if __name__ == "__main__":
     BASE_MODEL = "Qwen/Qwen2-0.5B"
@@ -14,10 +14,10 @@ if __name__ == "__main__":
     HF_ID = 'ebony59'
     MODEL_NAME = 'Qwen2-gsm8k-syn-PRM-1label'
 
-    wandb.init(project=PROJECT_NAME, name="1 epoch, 1 label")
+    wandb.init(project=PROJECT_NAME, name="1 epoch, sequence")
 
     # Load tokeniser and base model
-    model = AutoModelForTokenClassification.from_pretrained(
+    model = AutoModelForSequenceClassification.from_pretrained(
         BASE_MODEL,
         num_labels=1,
         device_map="cuda",

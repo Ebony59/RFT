@@ -9,6 +9,8 @@
 
 `pip install -r requirements.txt`
 
+`export PYTHONPATH=<path/to/RFT>:$PYTHONPATH`
+
 ###
 
 Introduction: https://www.notion.so/RFT-on-gsm8k-1df074d52625804ca60ded68d4164c97?pvs=4

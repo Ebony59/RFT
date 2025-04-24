@@ -14,7 +14,7 @@ from torch.nn.utils.rnn import pad_sequence
 from torch.nn.utils import clip_grad_norm_
 from peft import LoraConfig, get_peft_model
 
-from common import *
+from trainer.common import *
 
 def apply_tokenizer(
     example,
@@ -33,8 +33,8 @@ def verify_data_collator(dataset, collator):
     res = []
     printed = False
     for row in dataset:
-        # _res = collator.torch_call([tokenizer(row['text'])])
-        _res = collator([row])  # collator expects a batch
+        _res = collator.torch_call([tokenizer(row['text'])])
+        # _res = collator([row])  # collator expects a batch
         pct = (_res['labels'] == -100).float().cpu().numpy().mean()
         res.append(pct)
         if not printed:
@@ -48,7 +48,7 @@ def verify_data_collator(dataset, collator):
 class TrainConfig:
     lr: float = 1e-6
     epochs: int = 1
-    batch_size: int = 4
+    batch_size: int = 8
     gradient_accumulation_steps = 4
     device: str = 'cuda'
     lr_scheduler_type: str = "cosine"
@@ -123,10 +123,6 @@ def train(
                     except Exception:
                         continue
 
-            # if len(equations) == 0:
-            #     hallucination_penalty = 1
-            # else:
-            #     hallucination_penalty = hallucination_penalty / len(equations)
             hallucination_penalty /= max(1, len(logit_strings))
 
             # Get rewards from PRM model
@@ -144,10 +140,11 @@ def train(
                 # Average scores across tokens
                 rewards = (positive_scores * prm_inputs.attention_mask).sum(dim=1) / prm_inputs.attention_mask.sum(dim=1)
             
-            # Scale rewards to appropriate range and apply as loss adjustment
-            reward_adjustment = (1.0 - rewards.mean())
-            
-            adjusted_loss = base_loss + 0.5 * hallucination_penalty + 0.5 * reward_adjustment
+            adjusted_loss = base_loss + 0.5 * hallucination_penalty - 0.1 * rewards.mean()
+
+            if global_step % 100 == 0:
+                print('logit_strings:', logit_strings[0])
+                print('rewards:', rewards[0])
         else:
             adjusted_loss = base_loss
 
@@ -166,11 +163,20 @@ def train(
         remove_columns=list(dataset.features),
         desc="Applying tokenizer and chat template",
     )
-    verify_data_collator(tokenized_dataset, collate_fn)
+    
+    collate_fn = DataCollatorForCompletionOnlyLM(
+        response_template="<|assistant|>\n",
+        tokenizer=tokenizer
+    )
+    verify_data_collator(dataset, collate_fn)
 
     dataloader = DataLoader(
         tokenized_dataset,
-        collate_fn=collate_fn,
+        collate_fn=lambda examples: {
+            k: v.to(config.device) 
+            for k, v in collate_fn(examples).items()
+        },
+        # collate_fn=collate_fn,
         batch_size=config.batch_size,
         shuffle=True
     )
@@ -249,7 +255,7 @@ if __name__ == "__main__":
     HF_ID = 'ebony59'
     MODEL_NAME = 'phi3.5-gsm8k-syn-FT-reward'
 
-    wandb.init(project=PROJECT_NAME, name="syn, 0.5*penalty+0.5*reward, r=16, 1e-6 cosine, 1 epoch")
+    wandb.init(project=PROJECT_NAME, name="syn, 0.5*penalty+0.1*reward, r=16, 1e-6 cosine, 1 epoch")
 
     # Load tokeniser and base model
     model = AutoModelForCausalLM.from_pretrained(
@@ -262,7 +268,7 @@ if __name__ == "__main__":
     tokenizer = AutoTokenizer.from_pretrained(BASE_MODEL)
     tokenizer.padding_side = "left"
     if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
+        tokenizer.add_special_tokens({"pad_token": "[PAD]"})
 
     reward_model = AutoModelForTokenClassification.from_pretrained(
         REWARD_MODEL,
@@ -272,6 +278,9 @@ if __name__ == "__main__":
         attn_implementation="flash_attention_2"
     )
     reward_tokenizer = AutoTokenizer.from_pretrained(REWARD_MODEL)
+    reward_tokenizer.padding_side = "left"
+    if reward_tokenizer.pad_token is None:
+        reward_tokenizer.add_special_tokens({"pad_token": "[PAD]"})
 
     # Load dataset
     dataset = datasets.load_dataset(TRAIN_DATASET)['train']
@@ -301,7 +310,7 @@ if __name__ == "__main__":
     trained_model = merge_and_upload_model(trained_model, tokenizer, f'{HF_ID}/{MODEL_NAME}')
 
     # Trained model verification
-    print("original model output")
+    print("new model output")
     validate_output(dataset, trained_model, tokenizer, samples=1)
     
 

@@ -5,7 +5,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer, pipeline
 from more_itertools import chunked
 
 from tqdm import tqdm
-from generate_data import generate_solution
+from process_data.generate_data import generate_solution
 
 def evaluate_model(
     model: AutoModelForCausalLM,
@@ -60,7 +60,7 @@ def evaluate_model(
     return correct / len(questions)
 
 if __name__ == "__main__":
-    MODEL = "ebony59/phi3.5-gsm8k-syn-FT-reward"
+    MODEL = "ebony59/phi3.5-gsm8k-syn-PPO"
     DATASET = "openai/gsm8k"
 
     samples = 'all'
