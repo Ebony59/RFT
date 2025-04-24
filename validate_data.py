@@ -27,7 +27,7 @@ def get_equations(answer):
 def get_distances(ds):
     curr_question = ds[0]['question']
     orig_equations = get_equations(ds[0]['orig_answer'])
-    avg_distances = []
+    str_orig_equations = '|'.join(orig_equations)
 
     selected_ds = []
 
@@ -38,7 +38,9 @@ def get_distances(ds):
             orig_equations = get_equations(d['orig_answer'])
 
             if len(orig_equations) == 0:
-                orig_equations = ['None']
+                orig_equations = [' ']
+
+            str_orig_equations = '|'.join(orig_equations)
 
         if d['correct'] == False:
             continue
@@ -48,13 +50,12 @@ def get_distances(ds):
             continue
 
         if len(equations) == 0:
-            equations = ['None']
+            equations = [' ']
 
-        dist = 0
-        for i, equation_i in enumerate(equations):
-            for j, equation_j in enumerate(orig_equations):
-                dist += Levenshtein.distance(equation_i, equation_j)
-        dist = dist / (len(equations)*len(orig_equations))
+        str_equations = '|'.join(equations)
+        dist = Levenshtein.distance(str_equations, str_orig_equations)
+        dist = dist / len(str_orig_equations)
+
         d['distance'] = dist
         selected_ds.append(d)
 

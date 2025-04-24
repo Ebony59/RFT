@@ -1,6 +1,6 @@
 Installation
 
-pip3 install --upgrade torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
+pip3 install torch torchvision torchaudio
 
 pip install flash-attn==2.7.3 --no-build-isolation
 

@@ -53,10 +53,14 @@ def evaluate_model(
             except:
                 continue
 
+        print('question:', question)
+        print('gt answer:', gt_answer)
+        print('response:', response)
+
     return correct / len(questions)
 
 if __name__ == "__main__":
-    MODEL = "ebony59/phi3.5-gsm8k-syn-FT-2"
+    MODEL = "ebony59/phi3.5-gsm8k-syn-FT-reward"
     DATASET = "openai/gsm8k"
 
     samples = 'all'

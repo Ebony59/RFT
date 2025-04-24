@@ -5,14 +5,16 @@ import wandb
 import numpy as np
 from tqdm import tqdm
 
-from transformers import AutoModelForCausalLM, AutoTokenizer, pipeline
+from transformers import AutoModelForCausalLM, AutoModelForTokenClassification, AutoTokenizer, get_scheduler
+from trl import DataCollatorForCompletionOnlyLM
 from torch.utils.data import DataLoader
 from dataclasses import dataclass
 from torch.optim import AdamW
 from torch.nn.utils.rnn import pad_sequence
+from torch.nn.utils import clip_grad_norm_
 from peft import LoraConfig, get_peft_model
 
-from SFT import merge_and_upload_model, print_trainable_parameters, apply_chat_template
+from common import *
 
 def apply_tokenizer(
     example,
@@ -31,6 +33,7 @@ def verify_data_collator(dataset, collator):
     res = []
     printed = False
     for row in dataset:
+        # _res = collator.torch_call([tokenizer(row['text'])])
         _res = collator([row])  # collator expects a batch
         pct = (_res['labels'] == -100).float().cpu().numpy().mean()
         res.append(pct)
@@ -48,10 +51,14 @@ class TrainConfig:
     batch_size: int = 4
     gradient_accumulation_steps = 4
     device: str = 'cuda'
+    lr_scheduler_type: str = "cosine"
+    warmup_ratio: float = 0.1
 
 def train(
     model: AutoModelForCausalLM,
     tokenizer: AutoTokenizer,
+    reward_model: AutoModelForTokenClassification,
+    reward_tokenizer: AutoTokenizer,
     dataset: datasets.Dataset,
     config: TrainConfig
 ) -> AutoModelForCausalLM:
@@ -84,13 +91,13 @@ def train(
 
         return {"input_ids": input_ids, "attention_mask": attention_mask, "labels": labels}
 
-    def loss_fn(batch):
+    def loss_fn(batch, global_step):
         outputs = model(
             input_ids=batch["input_ids"],
             attention_mask=batch["attention_mask"],
             labels=batch["labels"]
         )
-        
+
         base_loss = outputs.loss
 
         if model.training:
@@ -115,9 +122,32 @@ def train(
                             hallucination_penalty += 1.0
                     except Exception:
                         continue
-    
+
+            # if len(equations) == 0:
+            #     hallucination_penalty = 1
+            # else:
+            #     hallucination_penalty = hallucination_penalty / len(equations)
             hallucination_penalty /= max(1, len(logit_strings))
-            adjusted_loss = base_loss + 0.5 * hallucination_penalty
+
+            # Get rewards from PRM model
+            prm_inputs = reward_tokenizer(
+                logit_strings, 
+                return_tensors="pt", 
+                padding=True, 
+                truncation=True
+            ).to(config.device)
+            
+            with torch.no_grad():
+                token_scores = reward_model(**prm_inputs).logits
+                # Get scores for positive class (class 1 = correct reasoning)
+                positive_scores = token_scores[:, :, 1]
+                # Average scores across tokens
+                rewards = (positive_scores * prm_inputs.attention_mask).sum(dim=1) / prm_inputs.attention_mask.sum(dim=1)
+            
+            # Scale rewards to appropriate range and apply as loss adjustment
+            reward_adjustment = (1.0 - rewards.mean())
+            
+            adjusted_loss = base_loss + 0.5 * hallucination_penalty + 0.5 * reward_adjustment
         else:
             adjusted_loss = base_loss
 
@@ -129,6 +159,11 @@ def train(
         print_trainable_parameters(model)
         return model
 
+    # collate_fn = DataCollatorForCompletionOnlyLM(
+    #     response_template="<|assistant|>\n",
+    #     tokenizer=tokenizer
+    # )
+
     tokenized_dataset = dataset.map(
         apply_tokenizer,
         fn_kwargs={"tokenizer": tokenizer},
@@ -136,16 +171,14 @@ def train(
         remove_columns=list(dataset.features),
         desc="Applying tokenizer and chat template",
     )
-
-    # data_collator = DataCollatorForCompletionOnlyLM(
-    #     response_template="<|assistant|>\n",
-    #     tokenizer=tokenizer
-    # )
-
     verify_data_collator(tokenized_dataset, collate_fn)
 
     dataloader = DataLoader(
         tokenized_dataset,
+        # collate_fn=lambda examples: {
+        #     k: v.to(config.device) 
+        #     for k, v in collate_fn(examples).items()
+        # },
         collate_fn=collate_fn,
         batch_size=config.batch_size,
         shuffle=True
@@ -153,9 +186,9 @@ def train(
 
     # Load lora model
     lora_config = LoraConfig(
-        lora_alpha=256,
+        r=16,
+        lora_alpha=32,
         lora_dropout=0.05,
-        r=128,
         bias="none",
         task_type="CAUSAL_LM",
         target_modules="all-linear",
@@ -165,6 +198,20 @@ def train(
 
     optimizer = AdamW(model.parameters(), lr=config.lr)
 
+    num_update_steps_per_epoch = len(dataloader) // config.gradient_accumulation_steps
+    max_train_steps = config.epochs * num_update_steps_per_epoch
+    
+    num_warmup_steps = int(max_train_steps * config.warmup_ratio)
+    
+    lr_scheduler = get_scheduler(
+        name=config.lr_scheduler_type,
+        optimizer=optimizer,
+        num_warmup_steps=num_warmup_steps,
+        num_training_steps=max_train_steps,
+    )
+    
+    print(f"Scheduler: {config.lr_scheduler_type}, Warmup steps: {num_warmup_steps}, Total steps: {max_train_steps}")
+
     # This is a pretty bare-bones loop, feel free to add anything particularly useful
     global_step = 0
     for epoch in range(config.epochs):
@@ -172,13 +219,16 @@ def train(
         epoch_loss = 0.0
 
         for step, batch in enumerate(tqdm(dataloader, desc=f"Epoch {epoch + 1}")):
+            # batch = {k: v.to(config.device) if isinstance(v, torch.Tensor) else v for k, v in batch.items()}
             global_step += 1
             outputs = model(**batch)
-            loss = loss_fn(batch) / config.gradient_accumulation_steps
+            loss = loss_fn(batch, global_step) / config.gradient_accumulation_steps
             loss.backward()
 
             if (step + 1) % config.gradient_accumulation_steps == 0:
+                clip_grad_norm_(model.parameters(), max_norm=1.0)
                 optimizer.step()
+                lr_scheduler.step()
                 optimizer.zero_grad()
 
             epoch_loss += loss.item() * config.gradient_accumulation_steps
@@ -186,10 +236,12 @@ def train(
             if (global_step + 1) % 10 == 0:
                 base_loss = outputs.loss.item()
                 adjusted_loss = loss.item() * config.gradient_accumulation_steps
+                current_lr = optimizer.param_groups[0]["lr"]
                 wandb.log({
                     "base_loss": base_loss,
                     "step_loss": adjusted_loss,
                     "hallucination_penalty": adjusted_loss - base_loss,
+                    "learning_rate": current_lr,
                     "global_step": global_step + 1
                 })
 
@@ -200,12 +252,13 @@ def train(
 
 if __name__ == "__main__":
     BASE_MODEL = "microsoft/Phi-3.5-mini-instruct"
+    REWARD_MODEL= "ebony59/Qwen2-gsm8k-syn-PRM"
     TRAIN_DATASET = "ebony59/gsm8k-gen-max-distance-sel"
     PROJECT_NAME = "gsm8k_Phi3.5_syn_FT"
     HF_ID = 'ebony59'
-    MODEL_NAME = 'phi3.5-gsm8k-syn-FT-2'
+    MODEL_NAME = 'phi3.5-gsm8k-syn-FT-reward'
 
-    wandb.init(project=PROJECT_NAME, name="syn, all linear, 0.5*penalty, 1 epoch")
+    wandb.init(project=PROJECT_NAME, name="syn, 0.5*penalty+0.5*reward, r=16, 1e-6 cosine, 1 epoch")
 
     # Load tokeniser and base model
     model = AutoModelForCausalLM.from_pretrained(
@@ -220,34 +273,46 @@ if __name__ == "__main__":
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
+    reward_model = AutoModelForTokenClassification.from_pretrained(
+        REWARD_MODEL,
+        device_map="cuda",
+        torch_dtype="auto",
+        trust_remote_code=True,
+        attn_implementation="flash_attention_2"
+    )
+    reward_tokenizer = AutoTokenizer.from_pretrained(REWARD_MODEL)
+
     # Load dataset
     dataset = datasets.load_dataset(TRAIN_DATASET)['train']
-    print('Dataset loaded. Length of dataset:', len(dataset))
-
-    config = TrainConfig()
-    trained_model = train(model, tokenizer, dataset, config)
-
-    trained_model = merge_and_upload_model(trained_model, tokenizer, f'{HF_ID}/{MODEL_NAME}')
-
-    # Trained model verification
     dataset = dataset.map(
         apply_chat_template,
         fn_kwargs={"tokenizer": tokenizer},
         num_proc=10,
-        remove_columns=list(dataset.features),
         desc="Applying chat template to train_sft",
     )
+    print('Dataset loaded. Length of dataset:', len(dataset))
 
-    text_generator = pipeline("text-generation", model=trained_model.half(), tokenizer=tokenizer)
-    prompt, expected_response = dataset['text'][10].split('\n<|assistant|>\n')
-    generated_text = text_generator(
-            prompt+'\n<|assistant|>\n',
-            max_new_tokens=500,
-            num_return_sequences=1,
-            eos_token_id=tokenizer.eos_token_id)
-    generated_text = generated_text[0]['generated_text'].split('\n<|assistant|>\n')[1]
-    print(f'Expected response: {expected_response}')
-    print(f'Generated response: {generated_text}')
+    config = TrainConfig()
+
+    #see original model output
+    print("original model output")
+    validate_output(dataset, model, tokenizer, samples=1)
+
+    trained_model = train(
+        model, 
+        tokenizer, 
+        reward_model,
+        reward_tokenizer,
+        dataset, 
+        config
+    )
+
+    trained_model = merge_and_upload_model(trained_model, tokenizer, f'{HF_ID}/{MODEL_NAME}')
+
+    # Trained model verification
+    print("original model output")
+    validate_output(dataset, trained_model, tokenizer, samples=1)
+    
 
 
 
